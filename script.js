@@ -34,19 +34,28 @@ async function rcFetch(path) {
   return res.json();
 }
 
+// Shuffle mixcloud iframes once per hour (instead of once per day)
 function shuffleIframesDaily() {
   const container = document.getElementById("mixcloud-list");
   if (!container) return;
-  const iframes = Array.from(container.querySelectorAll("iframe"));
-  const today = new Date().toISOString().split("T")[0];
-  if (localStorage.getItem("lastShuffleDate") === today) return;
 
+  const HOUR = 60 * 60 * 1000;
+  const lastShuffle = parseInt(localStorage.getItem("lastShuffleTime"), 10);
+  const now = Date.now();
+
+  // if we've shuffled within the past hour, do nothing
+  if (lastShuffle && (now - lastShuffle) < HOUR) return;
+
+  // Fisher–Yates shuffle
+  const iframes = Array.from(container.querySelectorAll("iframe"));
   for (let i = iframes.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
     container.appendChild(iframes[j]);
     iframes.splice(j, 1);
   }
-  localStorage.setItem("lastShuffleDate", today);
+
+  // record this shuffle time
+  localStorage.setItem("lastShuffleTime", now.toString());
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -67,19 +76,29 @@ async function loadArchives() {
       const iframe = document.createElement('iframe');
       iframe.className = 'mixcloud-iframe';
       iframe.src = `https://www.mixcloud.com/widget/iframe/?hide_cover=1&light=1&feed=${feed}`;
-      iframe.loading = 'lazy'; iframe.width = '100%'; iframe.height = '120'; iframe.frameBorder = '0';
+      iframe.loading = 'lazy';
+      iframe.width = '100%';
+      iframe.height = '120';
+      iframe.frameBorder = '0';
       item.appendChild(iframe);
 
       if (!isMobile) {
         const remove = document.createElement('a');
-        remove.href = '#'; remove.className = 'remove-link'; remove.textContent = 'Remove show';
-        remove.addEventListener('click', e => { e.preventDefault(); deleteMixcloud(idx); });
+        remove.href = '#';
+        remove.className = 'remove-link';
+        remove.textContent = 'Remove show';
+        remove.addEventListener('click', e => {
+          e.preventDefault();
+          deleteMixcloud(idx);
+        });
         item.appendChild(remove);
       }
+
       container.prepend(item);
     });
 
     shuffleIframesDaily();
+
     const scriptTag = document.createElement('script');
     scriptTag.src = 'https://widget.mixcloud.com/widget.js';
     scriptTag.async = true;
@@ -90,26 +109,40 @@ async function loadArchives() {
 }
 
 async function addMixcloud() {
-  const input = document.getElementById('mixcloud-url'); if (!input) return;
-  const url = input.value.trim(); if (!url) return alert('Please paste a valid Mixcloud URL');
+  const input = document.getElementById('mixcloud-url');
+  if (!input) return;
+  const url = input.value.trim();
+  if (!url) return alert('Please paste a valid Mixcloud URL');
   const pw = prompt('Enter archive password:');
   if (pw !== MIXCLOUD_PASSWORD) return alert('Incorrect password');
   try {
-    const form = new FormData(); form.append('url', url); form.append('password', pw);
+    const form = new FormData();
+    form.append('url', url);
+    form.append('password', pw);
     const res = await fetch('add_archive.php', { method: 'POST', body: form });
-    if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.error || res.statusText); }
-    input.value = ''; await loadArchives();
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || res.statusText);
+    }
+    input.value = '';
+    await loadArchives();
   } catch (err) {
     alert('Add failed: ' + err.message);
   }
 }
 
 async function deleteMixcloud(index) {
-  const pw = prompt('Enter archive password:'); if (pw !== MIXCLOUD_PASSWORD) return alert('Incorrect password');
+  const pw = prompt('Enter archive password:');
+  if (pw !== MIXCLOUD_PASSWORD) return alert('Incorrect password');
   try {
-    const form = new FormData(); form.append('index', index); form.append('password', pw);
+    const form = new FormData();
+    form.append('index', index);
+    form.append('password', pw);
     const res = await fetch('delete_archive.php', { method: 'POST', body: form });
-    if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.error || res.statusText); }
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || res.statusText);
+    }
     await loadArchives();
   } catch (err) {
     alert('Delete failed: ' + err.message);
@@ -124,7 +157,8 @@ async function fetchLiveNow() {
     const { result } = await rcFetch(`/station/${STATION_ID}/schedule/live`);
     const { metadata: md = {}, content: ct = {} } = result;
     document.getElementById('now-dj').textContent = md.artist
-      ? `${md.artist} – ${md.title}` : (ct.title || 'No live show');
+      ? `${md.artist} – ${md.title}`
+      : (ct.title || 'No live show');
     document.getElementById('now-art').src = md.artwork_url || FALLBACK_ART;
   } catch (e) {
     console.error('Live fetch error:', e);
@@ -142,36 +176,57 @@ async function fetchWeeklySchedule() {
     const { schedules } = await rcFetch(
       `/station/${STATION_ID}/schedule?startDate=${now.toISOString()}&endDate=${then.toISOString()}`
     );
-    if (!schedules.length) { container.innerHTML = '<p>No shows scheduled this week.</p>'; return; }
+    if (!schedules.length) {
+      container.innerHTML = '<p>No shows scheduled this week.</p>';
+      return;
+    }
     const byDay = schedules.reduce((acc, ev) => {
       const day = new Date(ev.startDateUtc)
-        .toLocaleDateString('en-GB',{ weekday:'long', day:'numeric', month:'short' });
-      (acc[day] = acc[day]||[]).push(ev);
+        .toLocaleDateString('en-GB', { weekday:'long', day:'numeric', month:'short' });
+      (acc[day] = acc[day] || []).push(ev);
       return acc;
     }, {});
     container.innerHTML = '';
     const fmt = iso => new Date(iso)
       .toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit' });
     Object.entries(byDay).forEach(([day, events]) => {
-      const h3 = document.createElement('h3'); h3.textContent = day; container.appendChild(h3);
-      const ul = document.createElement('ul'); ul.style.listStyle = 'none'; ul.style.padding = '0';
+      const h3 = document.createElement('h3');
+      h3.textContent = day;
+      container.appendChild(h3);
+      const ul = document.createElement('ul');
+      ul.style.listStyle = 'none';
+      ul.style.padding = '0';
       events.forEach(ev => {
-        const li = document.createElement('li'); li.style.marginBottom = '1rem';
-        const wrap = document.createElement('div'); wrap.style.display = 'flex'; wrap.style.alignItems = 'center'; wrap.style.gap = '8px';
-        const t = document.createElement('strong'); t.textContent = `${fmt(ev.startDateUtc)}–${fmt(ev.endDateUtc)}`; wrap.appendChild(t);
+        const li = document.createElement('li');
+        li.style.marginBottom = '1rem';
+        const wrap = document.createElement('div');
+        wrap.style.display = 'flex';
+        wrap.style.alignItems = 'center';
+        wrap.style.gap = '8px';
+        const t = document.createElement('strong');
+        t.textContent = `${fmt(ev.startDateUtc)}–${fmt(ev.endDateUtc)}`;
+        wrap.appendChild(t);
         const art = ev.metadata?.artwork?.default || ev.metadata?.artwork?.original;
         if (art) {
-          const img = document.createElement('img'); img.src = art; img.alt = `${ev.title} artwork`;
-          img.style.cssText = 'width:30px;height:30px;object-fit:cover;border-radius:３px;'; wrap.appendChild(img);
+          const img = document.createElement('img');
+          img.src = art;
+          img.alt = `${ev.title} artwork`;
+          img.style.cssText = 'width:30px;height:30px;object-fit:cover;border-radius:３px;';
+          wrap.appendChild(img);
         }
-        const span = document.createElement('span'); span.textContent = ev.title; wrap.appendChild(span);
+        const span = document.createElement('span');
+        span.textContent = ev.title;
+        wrap.appendChild(span);
         if (!/archive/i.test(ev.title)) {
           const a = document.createElement('a');
           a.href = createGoogleCalLink(ev.title, ev.startDateUtc, ev.endDateUtc);
-          a.target = '_blank'; a.innerHTML = '📅';
-          a.style.cssText = 'font-size:1.4rem;text-decoration:none;margin-left:6px;'; wrap.appendChild(a);
+          a.target = '_blank';
+          a.innerHTML = '📅';
+          a.style.cssText = 'font-size:1.4rem;text-decoration:none;margin-left:6px;';
+          wrap.appendChild(a);
         }
-        li.appendChild(wrap); ul.appendChild(li);
+        li.appendChild(wrap);
+        ul.appendChild(li);
       });
       container.appendChild(ul);
     });
@@ -185,12 +240,14 @@ async function fetchNowPlayingArchive() {
   try {
     const { result } = await rcFetch(`/station/${STATION_ID}/schedule/live`);
     const { metadata: md = {}, content: ct = {} } = result;
-    const el = document.getElementById('now-archive'); let text = 'Now Playing: ';
+    const el = document.getElementById('now-archive');
+    let text = 'Now Playing: ';
     if (md.title) text += md.artist ? `${md.artist} – ${md.title}` : md.title;
     else if (md.filename) text += md.filename;
     else if (ct.title) text += ct.title;
     else if (ct.name) text += ct.name;
-    else text += 'Unknown Show'; el.textContent = text;
+    else text += 'Unknown Show';
+    el.textContent = text;
   } catch (e) {
     console.error('Archive-now error:', e);
     document.getElementById('now-archive').textContent = 'Unable to load archive show';
@@ -206,9 +263,7 @@ function openChatPopup() {
     const modal    = document.getElementById('chatModal'),
           iframeEl = document.getElementById('chatModalIframe');
     if (modal && iframeEl) {
-      if (!iframeEl.src) {
-        iframeEl.src = url;
-      }
+      if (!iframeEl.src) iframeEl.src = url;
       modal.style.display = 'flex';
     }
   } else {
@@ -237,16 +292,24 @@ function closeChatModal() {
 // 6) INITIALIZATION
 // ─────────────────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
-  fetchLiveNow(); fetchWeeklySchedule(); fetchNowPlayingArchive(); loadArchives();
-  setInterval(fetchLiveNow, 30000); setInterval(fetchNowPlayingArchive, 30000);
+  fetchLiveNow();
+  fetchWeeklySchedule();
+  fetchNowPlayingArchive();
+  loadArchives();
+
+  setInterval(fetchLiveNow, 30000);
+  setInterval(fetchNowPlayingArchive, 30000);
 
   if (isMobile) {
     document.querySelector('.mixcloud')?.remove();
   } else {
     document.querySelectorAll('iframe.mixcloud-iframe').forEach(ifr => {
       ifr.src = ifr.src || ifr.dataset.src;
-    }); shuffleIframesDaily();
-    const s = document.createElement('script'); s.src = 'https://widget.mixcloud.com/widget.js'; s.async = true;
+    });
+    shuffleIframesDaily();
+    const s = document.createElement('script');
+    s.src = 'https://widget.mixcloud.com/widget.js';
+    s.async = true;
     document.body.appendChild(s);
   }
 
@@ -257,8 +320,12 @@ document.addEventListener('DOMContentLoaded', () => {
     w.document.close();
   });
 
-  const ul = document.querySelector('.rc-user-list'); if (ul) {
-    new MutationObserver(() => { Array.from(ul.children).forEach(li => { if (!li.textContent.trim()) li.remove(); });
+  const ul = document.querySelector('.rc-user-list');
+  if (ul) {
+    new MutationObserver(() => {
+      Array.from(ul.children).forEach(li => {
+        if (!li.textContent.trim()) li.remove();
+      });
     }).observe(ul, { childList: true });
   }
 
@@ -269,10 +336,14 @@ document.addEventListener('DOMContentLoaded', () => {
   const leftEl  = document.querySelector('.header-gif-left');
   if (rightEl && leftEl) {
     const sets = [
-      { right: 'https://cutterschoiceradio.com/Untitled%20design(4).gif',
-        left:  'https://cutterschoiceradio.com/Untitled%20design(5).gif' },
-      { right: 'https://cutterschoiceradio.com/Untitled%20design(7).gif',
-        left:  'https://cutterschoiceradio.com/Untitled%20design(8).gif' }
+      {
+        right: 'https://cutterschoiceradio.com/Untitled%20design(4).gif',
+        left:  'https://cutterschoiceradio.com/Untitled%20design(5).gif'
+      },
+      {
+        right: 'https://cutterschoiceradio.com/Untitled%20design(7).gif',
+        left:  'https://cutterschoiceradio.com/Untitled%20design(8).gif'
+      }
     ];
 
     let current = 0;      // which set we’re on (0 = axes, 1 = scissors)
